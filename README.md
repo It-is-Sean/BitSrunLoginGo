@@ -9,7 +9,7 @@
 
 > 主要登录逻辑来自： https://github.com/coffeehat/BIT-srun-login-script
 
-Openwrt 可以参考 [immortalwrt/packages/net/bitsrunlogin-go](https://github.com/immortalwrt/packages/tree/master/net/bitsrunlogin-go) 添加构建配置文件。单独复制文件夹、添加源或直接使用 [immortalwrt](https://github.com/immortalwrt/immortalwrt) 编译固件，选择 application / [luci-app-bitsrunlogin-go](https://github.com/immortalwrt/luci/tree/master/applications/luci-app-bitsrunlogin-go)
+Openwrt 可以参考 [immortalwrt/packages/net/bitsrunlogin-go](https://github.com/immortalwrt/packages/tree/master/net/bitsrunlogin-go) 添加构建配置文件。单独复制文件夹、添加源或直接使用 [immortalwrt](https://github.com/immx233/immortalwrt) 编译固件，选择 application / [luci-app-bitsrunlogin-go](https://github.com/immortalwrt/luci/tree/master/applications/luci-app-bitsrunlogin-go)
 
 ## :gear:运行
 
@@ -27,7 +27,6 @@ Openwrt 可以参考 [immortalwrt/packages/net/bitsrunlogin-go](https://github.c
 其他 flags:
 
 ```text
---interface eth0.1  #指定使用 eth0.1 登录，多网卡模式无效
 --debug             #临时开启 debug 模式
 --auto-acid         #自动嗅探 acid
 --acid 7            #覆写配置文件 acid 值
@@ -37,12 +36,12 @@ Openwrt 可以参考 [immortalwrt/packages/net/bitsrunlogin-go](https://github.c
 Config.yaml 说明：
 
 ```yaml
-form:
-  domain: www.msftconnecttest.com #登录地址 ip 或域名
-  username: "" #账号
-  user_type: cmcc #运营商类型，详情看下方文字说明
-  password: "" #密码
-meta: #登录参数
+accounts: # 账号列表，支持多账号同时登录
+  - username: "" # 账号
+    password: "" # 密码
+    user_type: cmcc # 运营商类型，详情看下方文字说明
+    net_iface: "" # 可选：绑定到指定网卡，如 "eth0"。留空则不绑定。仅在 Linux 系统下生效。
+meta: # 登录参数
   "n": "200"
   type: "1"
   acid: "5"
@@ -52,15 +51,14 @@ meta: #登录参数
   info_prefix: SRBX1 # info 字段前缀括号中的值
   double_stack: false
 settings:
-  basic: #基础设置
-    https: false #访问校园网 API 时使用 https 协议
-    skip_cert_verify: false #跳过证书有效校验
-    timeout: 5 #网络请求超时时间（秒，正整数）
-    interfaces: "" #网卡名称正则（注意转义），如：eth0\.[2-3]，不为空时为多网卡模式
-    interfaces_interval: 0 # 秒，多网卡模式切换网卡时触发的等待时间
-  guardian: #守护模式（后台常驻）
-    enable: false 
-    duration: 300 #网络检查周期（秒，正整数）
+  basic: # 基础设置
+    https: false # 访问校园网 API 时使用 https 协议
+    skip_cert_verify: false # 跳过证书有效校验
+    timeout: 5 # 网络请求超时时间（秒，正整数）
+    domain: www.msftconnecttest.com # 登录地址 ip 或域名
+  guardian: # 守护模式（后台常驻）
+    enable: false
+    duration: 300 # 网络检查周期（秒，正整数）
   backoff: # 积分/指数退避
     enable: false # 开启后同时对所有运行模式生效，作用于登录失败的重试
     max_retries: 0 # 为 0 时无限重试直至成功
@@ -71,23 +69,27 @@ settings:
     inter_const_factor: 0 # 内常数因子，秒
     outer_const_factor: 0 # 外常数因子，秒
   log:
-    debug_level: false #打印调试日志
-    write_file: false #写日志文件
-    log_path: ./ #日志文件存放目录路径
-    log_name: "" #指定日志文件名
-  ddns: #校园网内网 ip ddns
+    debug_level: false # 打印调试日志
+    write_file: false # 写日志文件
+    log_path: ./ # 日志文件存放目录路径
+    log_name: "" # 指定日志文件名
+  ddns: # 校园网内网 ip ddns
     enable: false
     domain: www.example.com
     ttl: 600
     provider: "cloudflare"
-    config: #这段配置是动态的，需要根据 provider 类型配置字段名，见 DDNS 说明
+    config: # 这段配置是动态的，需要根据 provider 类型配置字段名，见 DDNS 说明
       zone: "xxxx"
       token: "xxxx"
-  reality: #从指定地址模拟浏览器行为进入登录页，如果登录未出现问题不用启用
+  reality: # 从指定地址模拟浏览器行为进入登录页，如果登录未出现问题不用启用
     enable: false
-    addr: http://www.baidu.com #初始地址，需要使用 http、域名
-  custom_header: #这段配置是动态的，用于设置请求头，可以自由填写
+    addr: http://www.baidu.com # 初始地址，需要使用 http、域名
+  custom_header: # 这段配置是动态的，用于设置请求头，可以自由填写
     User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0
+  webhook: # Webhook 配置
+    enable: false
+    url: ""
+    timeout: 30
 ```
 
 登录参数从原网页登陆时对 `/srun_portal` 的请求抓取，抓取时请把浏览器控制台的 `preserve log`（保留日志）启用。
@@ -104,27 +106,39 @@ settings:
 
 支持的 Provider 及其设置（将额外配置添加到配置文件 DDNS 配置内）：
 
-|  Provider  | 额外配置项                                   |
-|:----------:|-----------------------------------------|
-| cloudflare<br>(Recommended) | `zone` 区域 ID<br/>`token` API 令牌         |
-|   aliyun   | `access_key_id`<br/>`access_key_secret` |
-|   dnspod   | `secret_id`<br/>`secret_key`            |
+| Provider | 额外配置项 |
+| :----------: | :--------------------------------------: |
+| cloudflare<br>(Recommended) | `zone` 区域 ID<br/>`token` API 令牌 |
+| aliyun | `access_key_id`<br/>`access_key_secret` |
+| dnspod | `secret_id`<br/>`secret_key` |
 
 如果多网卡模式下使用 ddns 存在问题，可以为个别网卡创建额外的配置文件单独进行登录。此外，校园网内网通信并不是安全的，校方往往会对其施加监管
 
 ## :shower: 多拨
 
-登录请求的网卡绑定在 Linux 下稳定生效，但在其它系统中可能无法成功绑定。如果要在 windows 等系统寻求稳定的多拨效果，可以考虑使用系统层面的绑定
+现在你可以通过在 `accounts` 配置中为每个账号指定 `net_iface` 字段来实现多拨。例如：
 
-请注意，少部分学校中在多拨中使用同一个账号时可能即使多拨成功，同一账号在同一个网关下的多个设备可能会共享带宽限制，这意味着多拨没有效果
+```yaml
+accounts:
+  - username: "user1"
+    password: "password1"
+    user_type: "cmcc"
+    net_iface: "eth0"
+  - username: "user2"
+    password: "password2"
+    user_type: "unicom"
+    net_iface: "eth1"
+```
 
-你可以通过配置文件中的 `settings.basic.interfaces` 指定网卡，也可以在将该配置留空的情况下使用 `--interface` 指定网卡
+请注意，`net_iface` 绑定功能仅在 Linux 系统下稳定生效，在其它系统中可能无法成功绑定。如果要在 windows 等系统寻求稳定的多拨效果，可以考虑使用系统层面的绑定。
+
+少部分学校中在多拨中使用同一个账号时可能即使多拨成功，同一账号在同一个网关下的多个设备可能会共享带宽限制，这意味着多拨没有效果。
 
 ## :anchor: Docker / Kubernetes
 
 镜像：`mmx233/bitsrunlogin-go`
 
-支持架构：`linux/amd64` `linux/386` `linux/arm64` `linux/arm/v7` `linux/arm/v6` `linux/ppc64le` `linux/riscv64` `linux/s390x` 
+支持架构：`linux/amd64` `linux/386` `linux/arm64` `linux/arm/v7` `linux/arm/v6` `linux/ppc64le` `linux/riscv64` `linux/s390x`
 
 在集群中使用时建议使用固定 tag 而不是 latest 以锁定版本。你可以在 [Dockerhub](https://hub.docker.com/repository/docker/mmx233/bitsrunlogin-go) 找到现在最新的 Tag
 
