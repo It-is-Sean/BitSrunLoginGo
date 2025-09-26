@@ -12,14 +12,21 @@ import (
 	"time"
 )
 
+type Account struct {
+	Username string `json:"username" yaml:"username"`
+	Password string `json:"password" yaml:"password"`
+	UserType string `json:"user_type" yaml:"user_type"`
+	NetIface string `json:"net_iface" yaml:"net_iface"`
+}
+
 type ConfFromFile struct {
-	Form     srun.LoginForm `json:"form" yaml:"form"`
+	Accounts []Account      `json:"accounts" yaml:"accounts"`
 	Meta     srun.LoginMeta `json:"meta" yaml:"meta"`
 	Settings SettingsConf   `json:"settings" yaml:"settings"`
 }
 
 var (
-	Form     *srun.LoginForm
+	Accounts []Account
 	Meta     *srun.LoginMeta
 	Settings *SettingsConf
 
@@ -58,7 +65,7 @@ func init() {
 	if err = reader.Unmarshal(data, &fileConf); err != nil {
 		logger.Fatalln("解析配置失败：", err)
 	}
-	Form = &fileConf.Form
+	Accounts = fileConf.Accounts
 	Meta = &fileConf.Meta
 	Settings = &fileConf.Settings
 	Timeout = time.Duration(Settings.Basic.Timeout) * time.Second
@@ -93,11 +100,10 @@ type (
 	}
 
 	BasicConf struct {
-		Https              bool   `json:"https" yaml:"https"`
-		SkipCertVerify     bool   `json:"skip_cert_verify" yaml:"skip_cert_verify"`
-		Timeout            uint   `json:"timeout" yaml:"timeout"`
-		Interfaces         string `json:"interfaces" yaml:"interfaces"`
-		InterfacesInterval uint   `json:"interfaces_interval" yaml:"interfaces_interval"`
+		Https          bool `json:"https" yaml:"https"`
+		SkipCertVerify bool `json:"skip_cert_verify" yaml:"skip_cert_verify"`
+		Timeout        uint `json:"timeout" yaml:"timeout"`
+		Domain         string `json:"domain" yaml:"domain"`
 	}
 
 	LogConf struct {

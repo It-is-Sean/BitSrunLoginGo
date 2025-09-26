@@ -5,9 +5,13 @@ import (
 )
 
 var defaultConfig = ConfFromFile{
-	Form: srun.LoginForm{
-		Domain:   "www.msftconnecttest.com",
-		UserType: "cmcc",
+	Accounts: []Account{
+		{
+			Username: "",
+			Password: "",
+			UserType: "cmcc",
+			NetIface: "",
+		},
 	},
 	Meta: srun.LoginMeta{
 		N:           "200",
@@ -21,6 +25,7 @@ var defaultConfig = ConfFromFile{
 	},
 	Settings: SettingsConf{
 		Basic: BasicConf{
+			Domain:  "www.msftconnecttest.com",
 			Timeout: 5,
 		},
 		Guardian: GuardianConf{

@@ -3,31 +3,20 @@
 package http_client
 
 import (
-	"crypto/tls"
 	"github.com/Mmx233/BitSrunLoginGo/internal/config"
-	"github.com/Mmx233/BitSrunLoginGo/tools"
-	"net"
+	"github.com/Mmx233/BitSrunLoginGo/internal/config/keys"
 	"net/http"
 )
 
-func CreateClientFromEth(eth *tools.Eth) *http.Client {
-	var addr net.Addr
-	if eth != nil {
-		addr = eth.Addr
+func newClientForInterface(netIface string) (*http.Client, error) {
+	if netIface != "" {
+		config.Logger.WithField(keys.LogComponent, "http_client").Warnf("Interface binding is not supported on this OS, ignoring interface %s", netIface)
 	}
 
+	transport := newDefaultTransport(config.Settings.Basic.SkipCertVerify)
+
 	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   config.Timeout,
-				LocalAddr: addr,
-			}).DialContext,
-			TLSHandshakeTimeout: config.Timeout,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: config.Settings.Basic.SkipCertVerify,
-			},
-			Proxy: http.ProxyFromEnvironment,
-		},
-		Timeout: config.Timeout,
-	}
+		Transport: transport,
+		Timeout:   config.Timeout,
+	}, nil
 }

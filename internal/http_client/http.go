@@ -1,54 +1,22 @@
 package http_client
 
 import (
-	"github.com/Mmx233/BitSrunLoginGo/internal/config"
-	"github.com/Mmx233/BitSrunLoginGo/internal/config/flags"
-	"github.com/Mmx233/BitSrunLoginGo/internal/config/keys"
-	"github.com/Mmx233/BitSrunLoginGo/tools"
-	"net"
+	"crypto/tls"
 	"net/http"
 )
 
-var DefaultClient *http.Client
-
-var _EthClientMap map[string]*http.Client
-
-func init() {
-	logger := config.Logger.WithField(keys.LogComponent, "init http")
-
-	var eth *tools.Eth
-	if flags.Interface != "" {
-		netEth, err := net.InterfaceByName(flags.Interface)
-		if err != nil {
-			logger.Warnf("获取指定网卡 %s 失败，使用默认网卡: %v", flags.Interface, err)
-		} else {
-			eth, err = tools.ConvertInterface(logger, *netEth)
-			if err != nil {
-				logger.Warnf("获取指定网卡 %s ip 地址失败，使用默认网卡: %v", flags.Interface, err)
-			} else if eth == nil {
-				logger.Warnf("指定网卡 %s 无可用 ip 地址，使用默认网卡", flags.Interface)
-			} else {
-				logger.Debugf("使用指定网卡 %s ip: %s", eth.Name, eth.Addr.String())
-			}
-		}
+// NewClient creates a new http.Client.
+// If netIface is not empty, it will try to bind the client to the specified network interface.
+func NewClient(netIface string) (*http.Client, error) {
+	if netIface == "" {
+		return newClientForInterface("")
 	}
-
-	DefaultClient = CreateClientFromEth(eth)
-
-	if config.Settings.Basic.Interfaces != "" {
-		_EthClientMap = make(map[string]*http.Client)
-	}
+	return newClientForInterface(netIface)
 }
 
-func ClientSelect(eth *tools.Eth) *http.Client {
-	if DefaultClient != nil {
-		return DefaultClient
-	}
-	if client, ok := _EthClientMap[eth.Name]; ok {
-		return client
-	} else {
-		client = CreateClientFromEth(eth)
-		_EthClientMap[eth.Name] = client
-		return client
+func newDefaultTransport(skipCertVerify bool) *http.Transport {
+	return &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipCertVerify},
+		// You can add other default transport settings here
 	}
 }

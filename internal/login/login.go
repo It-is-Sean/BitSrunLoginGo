@@ -2,99 +2,130 @@ package login
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/Mmx233/BackoffCli/backoff"
 	"github.com/Mmx233/BitSrunLoginGo/internal/config"
-	"github.com/Mmx233/BitSrunLoginGo/internal/config/flags"
 	"github.com/Mmx233/BitSrunLoginGo/internal/config/keys"
 	"github.com/Mmx233/BitSrunLoginGo/internal/dns"
 	"github.com/Mmx233/BitSrunLoginGo/internal/http_client"
 	"github.com/Mmx233/BitSrunLoginGo/internal/webhook"
 	"github.com/Mmx233/BitSrunLoginGo/pkg/srun"
-	"github.com/Mmx233/BitSrunLoginGo/tools"
 	log "github.com/sirupsen/logrus"
 	"net/http"
-	"sync"
-	"time"
 )
 
-var ipLast string
-var debugTip sync.Once
+// LoginForAccount handles the login process for a single account.
+func LoginForAccount(logger log.FieldLogger, account config.Account, eventQueue webhook.EventQueue) error {
+	logger = logger.WithField("account", account.Username)
+	eventContext := fmt.Sprintf("login_%s", account.Username)
 
-type Conf struct {
-	Logger                      log.FieldLogger
-	IsOnlineDetectLogDebugLevel bool
-	EventQueue                  webhook.EventQueue
-}
+	eventQueue.AddEvent(webhook.NewDataEvent(webhook.ProcessBegin, eventContext, nil))
 
-func Login(conf Conf) error {
-	conf.EventQueue.AddEvent(webhook.NewDataEvent(webhook.ProcessBegin, "", nil))
-	var err error
-
-	logger := conf.Logger
-	if config.Settings.Basic.Interfaces == "" { //单网卡
-		err = Single(SingleConf{
-			Conf:         conf,
-			EventContext: fmt.Sprintf("login_single_%d", time.Now().Unix()),
-			Eth:          nil,
-		})
-		if err != nil {
-			logger.Errorln("登录出错: ", err)
-			debugTip.Do(func() {
-				if !config.Settings.Log.DebugLevel {
-					logger.Infoln("开启调试日志 (debug_level) 获取详细信息")
-				}
-			})
-		}
-	} else { //多网卡
-		err = Interfaces(conf)
+	loginFunc := func(ctx context.Context) error {
+		return doLogin(logger, account, eventQueue, eventContext)
 	}
 
-	conf.EventQueue.AddEvent(webhook.NewDataEvent(webhook.ProcessFinish, "", nil))
+	var err error
+	if config.Settings.Backoff.Enable {
+		err = backoff.NewInstance(loginFunc, config.BackoffConfig).Run(context.TODO())
+	} else {
+		err = loginFunc(context.TODO())
+	}
+
+	if err != nil {
+		logger.Errorln("Login failed after retries: ", err)
+		eventQueue.AddEvent(webhook.NewActionFailureEvent(webhook.Login, eventContext, nil, err.Error()))
+	} else {
+		logger.Infoln("Login successful")
+		eventQueue.AddEvent(webhook.NewActionSuccessEvent(webhook.Login, eventContext, nil, account.Username))
+	}
+
+	eventQueue.AddEvent(webhook.NewDataEvent(webhook.ProcessFinish, eventContext, nil))
 	return err
 }
 
-func Interfaces(conf Conf) error {
-	logger := conf.Logger
-	interfaces, err := tools.GetInterfaceAddr(logger, config.Settings.Basic.Interfaces)
+func doLogin(logger log.FieldLogger, account config.Account, eventQueue webhook.EventQueue, eventContext string) error {
+	logger.Infoln("Attempting to login...")
+
+	httpClient, err := http_client.NewClient(account.NetIface)
 	if err != nil {
+		return fmt.Errorf("failed to create http client: %w", err)
+	}
+
+	loginInfo := srun.LoginInfo{
+		Form: srun.LoginForm{
+			Username: account.Username,
+			Password: account.Password,
+			UserType: account.UserType,
+			Domain:   config.Settings.Basic.Domain,
+		},
+		Meta: *config.Meta,
+	}
+
+	srunClient := srun.New(&srun.Conf{
+		Logger:       logger,
+		Https:        config.Settings.Basic.Https,
+		LoginInfo:    loginInfo,
+		Client:       httpClient,
+		CustomHeader: config.Settings.CustomHeader,
+	})
+
+	srunDetector := srunClient.Api.NewDetector()
+
+	// Acid and Enc detection can be added here if needed, following the logic from the old doLogin
+
+	status, ip, err := srunClient.LoginStatus()
+	if err != nil {
+		// Handle errors, maybe the response is missing IP but still indicates online status
+		if status == nil {
+			return fmt.Errorf("failed to get login status: %w", err)
+		}
+		logger.Warnf("Could not get client IP from login status: %v", err)
+	}
+
+	var clientIp string
+	if ip != nil {
+		clientIp = *ip
+	}
+
+	if status != nil && *status {
+		logger.Infoln("User is already online. IP: ", clientIp)
+		if config.Settings.DDNS.Enable {
+			_ = ddns(logger, clientIp, httpClient, eventQueue, eventContext)
+		}
+		return nil
+	}
+
+	logger.Infoln("User is offline, proceeding with login.")
+
+	loginIp := ""
+	if !config.Meta.DoubleStack {
+		if clientIp == "" {
+			// If we couldn't get the IP from LoginStatus, try to detect it.
+			detectedIp, detectErr := srunDetector.DetectIp()
+			if detectErr != nil {
+				return fmt.Errorf("failed to detect client IP: %w", detectErr)
+			}
+			clientIp = detectedIp
+		}
+		loginIp = clientIp
+	}
+
+	if err = srunClient.DoLogin(loginIp); err != nil {
 		return err
 	}
-	var interval = time.Duration(config.Settings.Basic.InterfacesInterval) * time.Second
-	var errCount int
-	for i, eth := range interfaces {
-		logger.Infoln("使用网卡: ", eth.Name)
-		if err := Single(SingleConf{
-			Conf:         conf,
-			EventContext: fmt.Sprintf("login_%s_%d", eth.Name, time.Now().Unix()),
-			EventProperties: webhook.NewProperty(webhook.PropertyElement{
-				Name:  "eth",
-				Value: eth.Name,
-			}),
-			Eth: &eth,
-		}); err != nil {
-			logger.Errorf("网卡 %s 登录出错: %v", eth.Name, err)
-			errCount++
-		}
-		if i != len(interfaces)-1 {
-			time.Sleep(interval)
-		}
+
+	logger.Infoln("Login successful. IP: ", clientIp)
+
+	if config.Settings.DDNS.Enable {
+		_ = ddns(logger, clientIp, httpClient, eventQueue, eventContext)
 	}
-	if errCount > 0 {
-		return errors.New("multi interface login not completely succeed")
-	}
+
 	return nil
 }
 
-type SingleConf struct {
-	Conf
-	EventContext    string
-	EventProperties webhook.Property
-	Eth             *tools.Eth
-}
-
-func ddns(conf SingleConf, logger log.FieldLogger, ip string, httpClient *http.Client) error {
+func ddns(logger log.FieldLogger, ip string, httpClient *http.Client, eventQueue webhook.EventQueue, eventContext string) error {
+	logger.Infoln("DDNS update triggered.")
 	err := dns.Run(&dns.Config{
 		Logger:   logger.WithField(keys.LogLoginModule, "ddns"),
 		Provider: config.Settings.DDNS.Provider,
@@ -104,217 +135,18 @@ func ddns(conf SingleConf, logger log.FieldLogger, ip string, httpClient *http.C
 		Conf:     config.Settings.DDNS.Config,
 		Http:     httpClient,
 	})
+
 	prop := []webhook.PropertyElement{
 		{
 			Name:  "domain",
 			Value: config.Settings.DDNS.Domain,
 		},
 	}
+
 	if err != nil {
-		conf.SendActionEvent(webhook.DNSUpdate, err, prop...)
+		eventQueue.AddEvent(webhook.NewActionFailureEvent(webhook.DNSUpdate, eventContext, prop, err.Error()))
 	} else {
-		conf.SendActionEvent(webhook.DNSUpdate, ip, prop...)
+		eventQueue.AddEvent(webhook.NewActionSuccessEvent(webhook.DNSUpdate, eventContext, prop, ip))
 	}
 	return err
-}
-
-func (conf SingleConf) SendDataEvent(ev webhook.EventName, prop ...webhook.PropertyElement) {
-	_prop := append(conf.EventProperties, prop...)
-	conf.EventQueue.AddEvent(webhook.NewDataEvent(ev, conf.EventContext, _prop))
-}
-
-func (conf SingleConf) SendActionEvent(ev webhook.EventName, val any, prop ...webhook.PropertyElement) {
-	_prop := conf.EventProperties.Add(prop...)
-	var event webhook.Event
-	err, ok := val.(error)
-	if ok {
-		event = webhook.NewActionFailureEvent(ev, conf.EventContext, _prop, err.Error())
-	} else {
-		event = webhook.NewActionSuccessEvent(ev, conf.EventContext, _prop, val.(string))
-	}
-	conf.EventQueue.AddEvent(event)
-}
-
-func Single(conf SingleConf) error {
-	conf.SendDataEvent(webhook.LoginStart)
-	var err error
-	if config.Settings.Backoff.Enable {
-		err = backoff.NewInstance(func(ctx context.Context) error {
-			err := doLogin(conf)
-			if err != nil {
-				conf.SendDataEvent(webhook.LoginFailed, webhook.PropertyElement{
-					Name:  "error",
-					Value: err.Error(),
-				})
-			}
-			return err
-		}, config.BackoffConfig).Run(context.TODO())
-	} else {
-		err = doLogin(conf)
-		if err != nil {
-			conf.SendDataEvent(webhook.LoginFailed, webhook.PropertyElement{
-				Name:  "error",
-				Value: err.Error(),
-			})
-		}
-	}
-
-	if err != nil {
-		conf.SendActionEvent(webhook.Login, err)
-	} else {
-		var value = "single"
-		if conf.Eth != nil {
-			value = conf.Eth.Name
-		}
-		conf.SendActionEvent(webhook.Login, value)
-	}
-
-	return err
-}
-
-func doLogin(conf SingleConf) error {
-	logger := conf.Logger
-
-	// 登录配置初始化
-	httpClient := http_client.ClientSelect(conf.Eth)
-	srunClient := srun.New(&srun.Conf{
-		Logger: logger,
-		Https:  config.Settings.Basic.Https,
-		LoginInfo: srun.LoginInfo{
-			Form: *config.Form,
-			Meta: *config.Meta,
-		},
-		Client:       httpClient,
-		CustomHeader: config.Settings.CustomHeader,
-	})
-
-	srunDetector := srunClient.Api.NewDetector()
-
-	// Reality 与 Acid
-	var acidOnReality bool
-	if config.Settings.Reality.Enable {
-		logger := logger.WithField(keys.LogLoginModule, "reality")
-
-		logger.Debugln("开始 Reality 流程")
-		acid, _, err := srunDetector.WithLogger(logger).Reality(config.Settings.Reality.Addr, flags.AutoAcid)
-		if err != nil {
-			logger.Warnln("Reality 请求异常:", err)
-			conf.SendActionEvent(webhook.Reality, err)
-		} else {
-			conf.SendActionEvent(webhook.Reality, "")
-			if flags.AutoAcid && acid != "" {
-				acidOnReality = true
-				logger.Debugf("使用嗅探 acid: %s", acid)
-				srunClient.LoginInfo.Meta.Acid = acid
-				conf.SendActionEvent(webhook.SettingsAcidDetected, acid)
-			}
-		}
-	}
-	if !acidOnReality && flags.AutoAcid {
-		logger := logger.WithField(keys.LogLoginModule, "acid")
-
-		logger.Debugln("开始嗅探")
-		acid, err := srunDetector.WithLogger(logger).DetectAcid()
-		if err != nil {
-			if errors.Is(err, srun.ErrAcidCannotFound) {
-				logger.Warnln("找不到 acid，使用配置 acid")
-			} else {
-				logger.Warnf("嗅探失败，使用配置 acid: %v", err)
-			}
-			conf.SendActionEvent(webhook.SettingsAcidDetected, err)
-		} else {
-			logger.Debugf("使用嗅探 acid: %s", acid)
-			srunClient.LoginInfo.Meta.Acid = acid
-			conf.SendActionEvent(webhook.SettingsAcidDetected, acid)
-		}
-	}
-
-	if flags.AutoEnc {
-		logger := logger.WithField(keys.LogLoginModule, "enc")
-
-		logger.Debugln("开始嗅探")
-		enc, err := srunDetector.WithLogger(logger).DetectEnc()
-		if err != nil {
-			if errors.Is(err, srun.ErrEnvCannotFound) {
-				logger.Warnln("找不到 enc，使用配置 enc")
-			} else {
-				logger.Warnf("嗅探失败，使用配置 enc: %v", err)
-			}
-			conf.SendActionEvent(webhook.SettingsEncDetected, err)
-		} else {
-			logger.Debugf("使用嗅探 enc: %s", enc)
-			srunClient.LoginInfo.Meta.Enc = enc
-			conf.SendActionEvent(webhook.SettingsEncDetected, enc)
-		}
-	}
-
-	// 选择输出函数
-	var _Println func(args ...interface{})
-	if conf.IsOnlineDetectLogDebugLevel {
-		_Println = logger.Debugln
-	} else {
-		_Println = logger.Infoln
-	}
-
-	_Println("正在获取登录状态")
-
-	var clientIp, loginIp string
-
-	isClientIpRequired := !config.Meta.DoubleStack || config.Settings.DDNS.Enable
-	online, ip, err := srunClient.LoginStatus()
-	if err != nil {
-		if online == nil {
-			return err
-		} else if isClientIpRequired {
-			logger.Debugln("响应体缺失客户端 ip，尝试从页面匹配")
-			clientIp, err = srunDetector.DetectIp()
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		clientIp = *ip
-	}
-
-	if clientIp != "" {
-		conf.SendDataEvent(webhook.ClientIPDetected, webhook.PropertyElement{
-			Name:  "ip",
-			Value: clientIp,
-		})
-	}
-
-	if config.Meta.DoubleStack {
-		logger.Debugln("使用双栈网络时认证 ip 为空")
-	} else {
-		loginIp = clientIp
-		logger.Debugln("认证客户端 ip: ", loginIp)
-	}
-
-	// 登录执行
-
-	if *online {
-		_Println("已登录~")
-
-		if config.Settings.DDNS.Enable && config.Settings.Guardian.Enable && ipLast != clientIp {
-			if ddns(conf, logger, clientIp, httpClient) == nil {
-				ipLast = clientIp
-			}
-		}
-
-		return nil
-	} else {
-		logger.Infoln("检测到用户未登录，开始尝试登录...")
-
-		if err = srunClient.DoLogin(loginIp); err != nil {
-			return err
-		}
-
-		logger.Infoln("登录成功~")
-
-		if config.Settings.DDNS.Enable {
-			_ = ddns(conf, logger, clientIp, httpClient)
-		}
-	}
-
-	return nil
 }

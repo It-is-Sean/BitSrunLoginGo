@@ -7,13 +7,17 @@ import (
 	"github.com/Mmx233/BitSrunLoginGo/internal/http_client"
 	"github.com/Mmx233/BitSrunLoginGo/internal/login"
 	"github.com/Mmx233/BitSrunLoginGo/internal/webhook"
+	"sync"
 	"time"
 )
 
 func main() {
 	logger := config.Logger
-	if config.Settings.Basic.Interfaces != "" {
-		logger.Infoln("[多网卡模式]")
+
+	// Create a new HTTP client for the webhook
+	webhookClient, err := http_client.NewClient("")
+	if err != nil {
+		logger.Fatalf("Failed to create webhook http client: %v", err)
 	}
 
 	var _webhook webhook.Webhook
@@ -21,7 +25,7 @@ func main() {
 		_webhook = webhook.PostWebhook{
 			Url:     config.Settings.Webhook.Url,
 			Timeout: time.Duration(config.Settings.Webhook.Timeout) * time.Second,
-			Client:  http_client.DefaultClient,
+			Client:  webhookClient,
 			Logger:  logger.WithField(keys.LogComponent, "webhook"),
 		}
 	} else {
@@ -30,21 +34,28 @@ func main() {
 	eventQueue := webhook.NewEventQueue(logger.WithField(keys.LogComponent, "eventQueue"), _webhook)
 
 	if config.Settings.Guardian.Enable {
-		//进入守护模式
+		logger.Infoln("Guardian mode enabled. Starting continuous login process.")
 		login.Guardian(logger.WithField(keys.LogComponent, "guard"), eventQueue)
 	} else {
-		//执行单次流程
-		_ = login.Login(login.Conf{
-			Logger:                      logger.WithField(keys.LogComponent, "login"),
-			IsOnlineDetectLogDebugLevel: false,
-			EventQueue:                  eventQueue,
-		})
+		logger.Infoln("Performing a single login for all configured accounts.")
+		var wg sync.WaitGroup
+		for _, account := range config.Accounts {
+			wg.Add(1)
+			go func(acc config.Account) {
+				defer wg.Done()
+				if err := login.LoginForAccount(logger, acc, eventQueue); err != nil {
+					logger.Errorf("Login failed for account %s: %v", acc.Username, err)
+				}
+			}(account)
+		}
+		wg.Wait()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Settings.Webhook.Timeout)*time.Second)
 	defer cancel()
-	err := eventQueue.Close(ctx)
-	if err != nil {
-		logger.Errorf("event queue ended with error: %v", err)
+	if err := eventQueue.Close(ctx); err != nil {
+		logger.Errorf("Event queue ended with error: %v", err)
 	}
+
+	logger.Infoln("Process finished.")
 }
