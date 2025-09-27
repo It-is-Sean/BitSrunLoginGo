@@ -1,0 +1,58 @@
+accounts: 
+  - username: "3250111361" 
+    password: "zcy0753@zju" 
+    user_type: cmcc 
+    net_iface: "wan" 
+  - username: "3250110890" 
+    password: "1bugaosuni" 
+    user_type: cmcc 
+    net_iface: "lan" 
+meta: 
+  "n": "200"
+  type: "1"
+  acid: "12"
+  enc: srun_bx1 
+  os: Windows 10
+  name: windows
+  info_prefix: SRBX1 
+  double_stack: false
+settings:
+  basic: 
+    https: false 
+    skip_cert_verify: false 
+    timeout: 5 
+    domain: "10.105.1.35"
+  guardian: 
+    enable: false
+    duration: 300 
+  backoff: 
+    enable: false 
+    max_retries: 0 
+    initial_duration: 2 
+    max_duration: 300 
+    
+    exponent_factor: 1 
+    inter_const_factor: 0 
+    outer_const_factor: 0 
+  log:
+    debug_level: false 
+    write_file: false 
+    log_path: ./ 
+    log_name: "" 
+  ddns: 
+    enable: false
+    domain: www.example.com
+    ttl: 600
+    provider: "cloudflare"
+    config: 
+      zone: "xxxx"
+      token: "xxxx"
+  reality: # 从指定地址模拟浏览器行为进入登录页，如果登录未出现问题不用启用
+    enable: false
+    addr: http://www.baidu.com 
+  custom_header: 
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0
+  webhook: 
+    enable: false
+    url: ""
+    timeout: 30

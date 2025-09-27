@@ -7,7 +7,6 @@ import (
 	"github.com/Mmx233/BitSrunLoginGo/internal/http_client"
 	"github.com/Mmx233/BitSrunLoginGo/internal/login"
 	"github.com/Mmx233/BitSrunLoginGo/internal/webhook"
-	"sync"
 	"time"
 )
 
@@ -38,17 +37,11 @@ func main() {
 		login.Guardian(logger.WithField(keys.LogComponent, "guard"), eventQueue)
 	} else {
 		logger.Infoln("Performing a single login for all configured accounts.")
-		var wg sync.WaitGroup
 		for _, account := range config.Accounts {
-			wg.Add(1)
-			go func(acc config.Account) {
-				defer wg.Done()
-				if err := login.LoginForAccount(logger, acc, eventQueue); err != nil {
-					logger.Errorf("Login failed for account %s: %v", acc.Username, err)
-				}
-			}(account)
+			if err := login.LoginForAccount(logger, account, eventQueue); err != nil {
+				logger.Errorf("Login failed for account %s: %v", account.Username, err)
+			}
 		}
-		wg.Wait()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Settings.Webhook.Timeout)*time.Second)

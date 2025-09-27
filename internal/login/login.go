@@ -16,7 +16,7 @@ import (
 
 // LoginForAccount handles the login process for a single account.
 func LoginForAccount(logger log.FieldLogger, account config.Account, eventQueue webhook.EventQueue) error {
-	logger = logger.WithField("account", account.Username)
+	logger = logger.WithField("account", account.Username).WithField("net_iface", account.NetIface)
 	eventContext := fmt.Sprintf("login_%s", account.Username)
 
 	eventQueue.AddEvent(webhook.NewDataEvent(webhook.ProcessBegin, eventContext, nil))
