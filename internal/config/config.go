@@ -65,6 +65,7 @@ func init() {
 	if err = reader.Unmarshal(data, &fileConf); err != nil {
 		logger.Fatalln("解析配置失败：", err)
 	}
+	// [TODO]: enumeration
 	Accounts = fileConf.Accounts
 	Meta = &fileConf.Meta
 	Settings = &fileConf.Settings
